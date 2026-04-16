@@ -37,19 +37,29 @@ All encoder values are clamped integers in the range **0–255**.
 t = encoderValue / 255.0       // range 0.0 to 1.0
 ```
 
+### Design principle: sweet-spot = original JPEG
+
+All effects are computed **relative to each image's sweet-spot encoder values**.  
+At the sweet spot: blur = 0, grain = 0, gamma = 1.0 → rendered image matches the source JPEG exactly.  
+Moving any axis away from the sweet spot adds the corresponding effect.
+
+```
+// Per-axis normalised offset from sweet spot (can be negative):
+aOffset = (aperture − target.aperture) / 255.0
+sOffset = (shutter  − target.shutter)  / 255.0
+iOffset = (iso      − target.iso)      / 255.0
+```
+
 ### 2.1 Aperture (f/1.4 → f/16)
 
 ```
-apertureT    = encoderValue / 255.0
-blurAmount   = (1.0 - apertureT)                  // 0=sharp, 1=max blur
-blurRadius   = depthValue × blurAmount × MAX_BLUR  // per-pixel, depth-weighted
+// Below sweet spot (wide open) → blur and brighter
+apertureBlur   = max(0, −aOffset)         // 0 at/above sweet spot, →1 toward wide open
+apertureRadius = 0.018 × apertureBlur     // UV units; max ~20px at 1080p
 
-// MAX_BLUR expressed as a fraction of image height, e.g. 0.028 (28px at 1080p)
-
-// Exposure shift (applied in final composite pass):
-apertureBrightness = lerp(+0.15, -0.10, apertureT)
-// → wide open: +0.15 stops brighter; stopped down: −0.10 stops darker
-// Applied as: colour = pow(colour, 1.0 − apertureBrightness)
+// Brightness shift (zero at sweet spot):
+apertureBrightness = aOffset × (−0.25)
+// → wide open (negative offset) → brighter; stopped down → darker
 ```
 
 **Photographic mapping (display only, 8 stops):**
@@ -70,14 +80,15 @@ Formula: `index = round((v / 255) × 7)`, then look up `[1.4, 2, 2.8, 4, 5.6, 8,
 ### 2.2 Shutter Speed (1/15s → 1/500s)
 
 ```
-shutterT       = encoderValue / 255.0
-blurStrength   = (1.0 - shutterT) × 0.05     // max 5% of image width
+// Below sweet spot (slow shutter) → radial blur and overexposed
+shutterBlur      = max(0, −sOffset)       // 0 at/above sweet spot, →1 toward slow shutter
+blurStrength     = shutterBlur × 0.05     // max 5% of image width
 // Direction: sample from current pixel toward image centre (0.5, 0.5)
 // 12 radial samples, weight tapered: w = 1.0 − t × 0.7
 
-// Exposure shift:
-shutterBrightness = lerp(+0.25, -0.20, shutterT)
-// → slow: +0.25 stops (overexposed); fast: −0.20 stops (underexposed)
+// Brightness shift (zero at sweet spot):
+shutterBrightness = sOffset × (−0.45)
+// → slow (negative offset) → overexposed; fast → underexposed
 ```
 
 **Photographic mapping (6 stops):**
@@ -96,9 +107,10 @@ Formula: `index = round((v / 255) × 5)`, then look up `[15, 30, 60, 125, 250, 5
 ### 2.3 ISO (64 → 12800)
 
 ```
-isoT           = encoderValue / 255.0
-grainIntensity = isoT × 0.18           // max amplitude ±0.18 per channel
-grainSize      = lerp(1.0, 3.5, isoT)  // pixel cell size: 1px fine → 3.5px coarse
+// Above sweet spot (high ISO) → grain and blown highlights
+isoGrain       = max(0, iOffset)          // 0 at/below sweet spot, →1 toward ISO 12800
+grainIntensity = isoGrain × 0.18          // max amplitude ±0.18 per channel
+grainSize      = lerp(1.0, 3.5, isoGrain) // pixel cell size: 1px fine → 3.5px coarse
 
 // Grain implementation: cell-based hash (no texture needed)
 //   scaledUV = uv × (resolution / grainSize)
@@ -106,9 +118,9 @@ grainSize      = lerp(1.0, 3.5, isoT)  // pixel cell size: 1px fine → 3.5px co
 //   grain    = hash(floor(scaledUV) + vec2(frame × 127.1, frame × 311.7))
 //   grain    = (grain − 0.5) × 2.0 × grainIntensity
 
-// Exposure shift (most dramatic — nearly full range):
-isoBrightness = lerp(-0.50, +0.50, isoT)
-// → ISO 64: −0.50 stops (crushed blacks); ISO 12800: +0.50 stops (blown highlights)
+// Brightness shift (zero at sweet spot):
+isoBrightness = iOffset × 1.0
+// → high ISO (positive offset) → blown highlights; low ISO → crushed blacks
 ```
 
 **Photographic mapping (9 stops):**
@@ -137,10 +149,12 @@ gamma           = clamp(1.0 − totalBrightness, 0.1, 3.5)
 outputColour    = pow(inputColour, gamma)
 ```
 
-Intensity ranking (brief spec):
-- ISO: dramatic — full range ~±0.50
-- Shutter: moderate — ~±0.25
-- Aperture: subtle — ~±0.15
+At the sweet spot all offsets are 0 → totalBrightness = 0 → gamma = 1.0 → no change.
+
+Intensity ranking (per-unit, full encoder range):
+- ISO: dramatic — up to ±1.0 stop per 255 units
+- Shutter: moderate — up to ±0.45 stops
+- Aperture: subtle — up to ±0.25 stops
 
 ---
 
