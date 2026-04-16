@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Exposure Triangle — Max Dupain</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+  #glCanvas, #hudCanvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+  }
+  #hudCanvas {
+    pointer-events: none;
+  }
+  /* Label overlay — correct exposure text */
+  #label {
+    position: absolute;
+    bottom: 12%;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.9);
+    font-family: 'Courier New', monospace;
+    font-size: clamp(14px, 1.2vw, 22px);
+    letter-spacing: 0.08em;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.8s ease;
+    text-shadow: 0 0 20px rgba(0,0,0,0.8);
+  }
+  /* Fallback simulator UI */
+  #simUI {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 32px;
+    align-items: flex-end;
+    background: rgba(0,0,0,0.6);
+    padding: 16px 24px 12px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 4px;
+    display: none; /* hidden until 'H' pressed or no hardware */
+  }
+  .sliderGroup {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .sliderGroup label {
+    color: rgba(255,255,255,0.6);
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .sliderGroup .photoLabel {
+    color: rgba(255,255,255,0.9);
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    min-width: 80px;
+    text-align: center;
+  }
+  .sliderGroup input[type=range] {
+    -webkit-appearance: none;
+    width: 160px;
+    height: 2px;
+    background: rgba(255,255,255,0.3);
+    outline: none;
+    writing-mode: horizontal-tb;
+  }
+  .sliderGroup input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+  }
+  /* Mode badge */
+  #modeBadge {
+    position: absolute;
+    top: 16px;
+    right: 20px;
+    color: rgba(255,255,255,0.35);
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+  /* Image select buttons */
+  #imgButtons {
+    position: absolute;
+    top: 16px;
+    left: 20px;
+    display: flex;
+    gap: 8px;
+    display: none;
+  }
+  .imgBtn {
+    width: 36px; height: 36px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.25);
+    color: rgba(255,255,255,0.6);
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .imgBtn.active {
+    background: rgba(255,255,255,0.25);
+    color: #fff;
+    border-color: rgba(255,255,255,0.6);
+  }
+  /* file:// protocol warning */
+  #fileWarning {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.92);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 9999;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+  }
+  #fileWarning h2 {
+    font-size: 15px;
+    letter-spacing: 0.15em;
+    color: rgba(255,160,30,1);
+    text-transform: uppercase;
+  }
+  #fileWarning p {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.6);
+    text-align: center;
+    line-height: 1.8;
+  }
+  #fileWarning code {
+    background: rgba(255,255,255,0.1);
+    padding: 8px 18px;
+    border-radius: 3px;
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.9);
+  }
+  /* Serial connect button */
+  #connectBtn {
+    position: absolute;
+    top: 16px;
+    right: 120px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.5);
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    padding: 5px 10px;
+    cursor: pointer;
+    border-radius: 2px;
+    display: none; /* shown only if Web Serial available */
+  }
+  #connectBtn:hover { background: rgba(255,255,255,0.15); }
+</style>
+</head>
+<body>
+
+<!-- file:// protocol warning (shown when not running via a local server) -->
+<div id="fileWarning" style="display:none">
+  <h2>Local server required</h2>
+  <p>WebGL cannot load image textures when the page is opened<br>directly as a file. Run it through the included local server:</p>
+  <code>npx serve -p 5174 .</code>
+  <p style="margin-top:4px">then open &nbsp;<strong>http://localhost:5174/exposure_triangle.html</strong></p>
+</div>
+
+<!-- WebGL render target -->
+<canvas id="glCanvas"></canvas>
+
+<!-- Canvas2D HUD overlay (triangle, dots, labels) -->
+<canvas id="hudCanvas"></canvas>
+
+<!-- Correct exposure text overlay -->
+<div id="label"></div>
+
+<!-- Mode indicator -->
+<div id="modeBadge">SIMULATOR</div>
+
+<!-- Serial connect button (shown when Web Serial API available) -->
+<button id="connectBtn">⬡ CONNECT HARDWARE</button>
+
+<!-- Image selection thumbnails (shown in simulator mode) -->
+<div id="imgButtons"></div>
+
+<!-- Fallback simulator sliders -->
+<div id="simUI">
+  <div class="sliderGroup">
+    <div class="photoLabel" id="apertureLabel">f/8</div>
+    <input type="range" id="apertureSlider" min="0" max="255" value="127">
+    <label>Aperture</label>
+  </div>
+  <div class="sliderGroup">
+    <div class="photoLabel" id="shutterLabel">1/60s</div>
+    <input type="range" id="shutterSlider" min="0" max="255" value="127">
+    <label>Shutter Speed</label>
+  </div>
+  <div class="sliderGroup">
+    <div class="photoLabel" id="isoLabel">ISO 400</div>
+    <input type="range" id="isoSlider" min="0" max="255" value="127">
+    <label>ISO</label>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// Show warning and halt if opened directly as a file (WebGL can't load textures)
+if (window.location.protocol === 'file:') {
+  document.getElementById('fileWarning').style.display = 'flex';
+  throw new Error('Must be served via HTTP — see on-screen instructions.');
+}
+
+// ============================================================
+// IMAGE / SCENE DATA
+// ============================================================
+
+const IMAGES = [
+  {
+    id: 'dupain_01',
+    image: 'assets/Dupain_ExampleImg.jpg',
+    depth: 'assets/Dupain_ExampleImg-DepthMap.jpg',
+    label: "f/11 \u00B7 1/125s \u00B7 ISO 100 \u2014 Dupain\u2019s choice for hard midday light",
+    // Targets tuned so the displayed photographic labels match the
+    // label string: f/11 · 1/125s · ISO 100
+    // aperture=219 → idx 6/7 → f/11
+    // shutter=153  → idx 3/5 → 1/125s
+    // iso=32       → idx 1/8 → ISO 100
+    targets: {
+      aperture: { value: 219, tolerance: 20 },
+      shutter:  { value: 153, tolerance: 20 },
+      iso:      { value: 32,  tolerance: 20 }
+    }
+  },
+  {
+    id: 'v1_fl19507613',
+    image: 'assets/V1-FL19507613.jpg',
+    depth: null,
+    // Beach portrait, harsh overhead sun — f/8 · 1/250s · ISO 100
+    // aperture=182 → f/8 (idx 5/7)
+    // shutter=204  → 1/250s (idx 4/5)
+    // iso=32       → ISO 100 (idx 1/8)
+    label: "f/8 \u00B7 1/250s \u00B7 ISO 100 \u2014 Hard sun on bleached sand",
+    targets: {
+      aperture: { value: 182, tolerance: 20 },
+      shutter:  { value: 204, tolerance: 20 },
+      iso:      { value: 32,  tolerance: 20 }
+    }
+  },
+  {
+    id: 'd66',
+    image: 'assets/D66.jpg',
+    depth: null,
+    // Industrial night exposure, light trails — f/2.8 · 1/15s · ISO 400
+    // aperture=73  → f/2.8 (idx 2/7)
+    // shutter=0    → 1/15s  (idx 0/5)
+    // iso=96       → ISO 400 (idx 3/8)
+    label: "f/2.8 \u00B7 1/15s \u00B7 ISO 400 \u2014 Long exposure, industrial light",
+    targets: {
+      aperture: { value: 73,  tolerance: 20 },
+      shutter:  { value: 0,   tolerance: 20 },
+      iso:      { value: 96,  tolerance: 20 }
+    }
+  },
+  {
+    id: 'e70124',
+    image: 'assets/e70124.jpg',
+    depth: null,
+    // Studio type/shadow copy — f/5.6 · 1/60s · ISO 200
+    // aperture=146 → f/5.6 (idx 4/7)
+    // shutter=102  → 1/60s  (idx 2/5)
+    // iso=64       → ISO 200 (idx 2/8)
+    label: "f/5.6 \u00B7 1/60s \u00B7 ISO 200 \u2014 Studio copy, shadow and type",
+    targets: {
+      aperture: { value: 146, tolerance: 20 },
+      shutter:  { value: 102, tolerance: 20 },
+      iso:      { value: 64,  tolerance: 20 }
+    }
+  }
+];
+
+// ============================================================
+// PHOTOGRAPHIC UNIT CONVERSIONS
+// ============================================================
+
+function apertureToFStop(v) {
+  const stops = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16];
+  const idx = Math.round((v / 255) * (stops.length - 1));
+  return 'f/' + stops[idx];
+}
+
+function shutterToFraction(v) {
+  const denoms = [15, 30, 60, 125, 250, 500];
+  const idx = Math.round((v / 255) * (denoms.length - 1));
+  return '1/' + denoms[idx] + 's';
+}
+
+function isoToASA(v) {
+  const isos = [64, 100, 200, 400, 800, 1600, 3200, 6400, 12800];
+  const idx = Math.round((v / 255) * (isos.length - 1));
+  return 'ISO ' + isos[idx];
+}
+
+// ============================================================
+// WEBGL SETUP
+// ============================================================
+
+const glCanvas  = document.getElementById('glCanvas');
+const hudCanvas = document.getElementById('hudCanvas');
+const hudCtx    = hudCanvas.getContext('2d');
+
+// Size both canvases to 1920x1080 internal resolution
+// CSS will scale them to fill the viewport
+const W = 1920, H = 1080;
+glCanvas.width  = W;
+glCanvas.height = H;
+hudCanvas.width  = W;
+hudCanvas.height = H;
+
+const gl = glCanvas.getContext('webgl', {
+  antialias: false,
+  alpha: false,
+  depth: false,
+  stencil: false,
+  preserveDrawingBuffer: false,
+  powerPreference: 'high-performance'
+});
+
+if (!gl) {
+  alert('WebGL not available. Please use Chrome.');
+}
+
+// ============================================================
+// SHADER SOURCE
+// ============================================================
+
+// Shared vertex shader — fullscreen quad, outputs UV coords
+const VS = `
+  attribute vec2 a_position;
+  varying   vec2 v_uv;
+  void main() {
+    // a_position is in clip space (-1..1), UV is 0..1
+    v_uv        = vec2(a_position.x * 0.5 + 0.5, 0.5 - a_position.y * 0.5);
+    gl_Position = vec4(a_position, 0.0, 1.0);
+  }
+`;
+
+// ---- Pass 0: Composite — slide positioning + aspect-ratio correction ----
+// Positions image A and B side-by-side according to slideT/slideDir,
+// then maps each canvas region into the image's correct UV space (pillarbox/letterbox).
+// Pixels outside the image bounds (the film rebate) return a dark warm grey that
+// picks up grain and exposure in the final pass, matching the old-film-stock look.
+const FS_COMPOSITE = `
+  precision mediump float;
+
+  uniform sampler2D u_imageA;
+  uniform sampler2D u_imageB;
+  uniform float     u_aspectA;   // imageA width/height
+  uniform float     u_aspectB;   // imageB width/height
+  uniform float     u_slideT;    // 0=imageA centred, 1=imageB centred
+  uniform float     u_slideDir;  // +1=slide left (B enters from right), -1=slide right
+
+  varying vec2 v_uv;
+
+  const float CANVAS_ASPECT = 16.0 / 9.0;  // 1920/1080
+
+  // Unexposed film rebate: dark warm grey — exposed to grain+exposure in Pass 3
+  const vec4 FILM_BASE = vec4(0.055, 0.050, 0.042, 1.0);
+
+  void main() {
+    // Canvas-local x for each image after slide offset
+    // Image A: occupies canvas [0,1] at t=0, slides off at t=1
+    // Image B: off-screen at t=0, slides to [0,1] at t=1
+    float xA = v_uv.x + u_slideDir * u_slideT;
+    float xB = v_uv.x + u_slideDir * (u_slideT - 1.0);
+
+    // Determine which image region this pixel falls in
+    // (at any t the two canvas regions are non-overlapping)
+    // fboComp is one extra FBO pass compared with the original pipeline.
+    // Each FBO round-trip inverts the stored Y relative to the display.
+    // Compensate by flipping the image-sample Y here so the net count stays odd
+    // and the final canvas output is right-side up.
+    float imgY = 1.0 - v_uv.y;
+
+    if (xA >= 0.0 && xA <= 1.0) {
+      // Inside image A's canvas region — apply contain (pillarbox) correction
+      float scale = u_aspectA / CANVAS_ASPECT;
+      float imgX  = (xA - 0.5) / scale + 0.5;
+      if (imgX >= 0.0 && imgX <= 1.0) {
+        gl_FragColor = texture2D(u_imageA, vec2(imgX, imgY));
+      } else {
+        gl_FragColor = FILM_BASE;
+      }
+    } else {
+      // Inside image B's canvas region
+      float scale = u_aspectB / CANVAS_ASPECT;
+      float imgX  = (xB - 0.5) / scale + 0.5;
+      if (imgX >= 0.0 && imgX <= 1.0) {
+        gl_FragColor = texture2D(u_imageB, vec2(imgX, imgY));
+      } else {
+        gl_FragColor = FILM_BASE;
+      }
+    }
+  }
+`;
+
+// ---- Pass 1 H/V: Gaussian blur (Aperture) ----
+// Simple separable blur on the composite FBO. Uniform radius — no per-pixel
+// depth masking needed since we no longer sample original image textures here.
+const FS_BLUR = `
+  precision mediump float;
+
+  uniform sampler2D u_source;
+  uniform float     u_blurRadius;  // UV units; 0 = sharp
+  uniform vec2      u_direction;   // (1,0) horizontal or (0,1) vertical
+
+  varying vec2 v_uv;
+
+  const float W0 = 0.2270270;
+  const float W1 = 0.1945946;
+  const float W2 = 0.1216216;
+  const float W3 = 0.0540541;
+  const float W4 = 0.0162162;
+
+  void main() {
+    if (u_blurRadius < 0.0005) {
+      gl_FragColor = texture2D(u_source, v_uv);
+      return;
+    }
+
+    vec4  result = texture2D(u_source, v_uv) * W0;
+    float totalW = W0;
+
+    vec2 s1 = u_direction * u_blurRadius * 0.25;
+    vec2 s2 = u_direction * u_blurRadius * 0.50;
+    vec2 s3 = u_direction * u_blurRadius * 0.75;
+    vec2 s4 = u_direction * u_blurRadius;
+
+    result += texture2D(u_source, clamp(v_uv + s1, 0.0, 1.0)) * W1;
+    result += texture2D(u_source, clamp(v_uv - s1, 0.0, 1.0)) * W1;
+    result += texture2D(u_source, clamp(v_uv + s2, 0.0, 1.0)) * W2;
+    result += texture2D(u_source, clamp(v_uv - s2, 0.0, 1.0)) * W2;
+    result += texture2D(u_source, clamp(v_uv + s3, 0.0, 1.0)) * W3;
+    result += texture2D(u_source, clamp(v_uv - s3, 0.0, 1.0)) * W3;
+    result += texture2D(u_source, clamp(v_uv + s4, 0.0, 1.0)) * W4;
+    result += texture2D(u_source, clamp(v_uv - s4, 0.0, 1.0)) * W4;
+    totalW += 2.0 * (W1 + W2 + W3 + W4);
+
+    gl_FragColor = result / totalW;
+  }
+`;
+
+// ---- Pass 2: Radial blur (Shutter Speed) ----
+const FS_RADIAL = `
+  precision mediump float;
+
+  uniform sampler2D u_source;     // FBO-B output (post-aperture)
+  uniform float     u_shutterT;   // 0=slow (max blur), 1=fast (sharp)
+  uniform vec2      u_centre;     // image centre, e.g. (0.5, 0.5)
+
+  varying vec2 v_uv;
+
+  // Number of radial samples — must be a compile-time constant in GLSL ES 1.0
+  const int RADIAL_SAMPLES = 12;
+
+  void main() {
+    // blurStrength: 0 at shutterT=1, max at shutterT=0
+    // 0.05 = 5% of image width max smear — reads as handheld camera shake
+    float blurStrength = (1.0 - u_shutterT) * 0.05;
+
+    if (blurStrength < 0.0005) {
+      gl_FragColor = texture2D(u_source, v_uv);
+      return;
+    }
+
+    vec2  dir    = u_centre - v_uv;  // vector toward centre
+    vec4  colour = vec4(0.0);
+    float totalW = 0.0;
+
+    for (int i = 0; i < RADIAL_SAMPLES; i++) {
+      float t = float(i) / float(RADIAL_SAMPLES - 1);  // 0..1
+      float w = 1.0 - t * 0.7;                          // taper weight toward extremes
+      vec2  uv = clamp(v_uv + dir * t * blurStrength, 0.0, 1.0);
+      colour  += texture2D(u_source, uv) * w;
+      totalW  += w;
+    }
+
+    gl_FragColor = colour / totalW;
+  }
+`;
+
+// ---- Pass 3: Film grain + exposure composite ----
+const FS_GRAIN = `
+  precision mediump float;
+
+  uniform sampler2D u_source;     // FBO-C output (post-shutter)
+  uniform float     u_apertureT;  // 0..1
+  uniform float     u_shutterT;   // 0..1
+  uniform float     u_isoT;       // 0..1
+  uniform float     u_time;       // seconds, for grain animation
+
+  varying vec2 v_uv;
+
+  // Hash function — no texture needed, GPU-friendly
+  float hash(vec2 p) {
+    p = fract(p * vec2(443.897, 441.423));
+    p += dot(p, p + 19.19);
+    return fract(p.x * p.y);
+  }
+
+  // Film grain: grainSize controls apparent crystal size
+  // Larger grainSize = each hash cell covers more pixels = coarser grain (high ISO)
+  float filmGrain(vec2 uv, float grainSize, float time) {
+    // Scale UV: dividing by grainSize means larger cells at higher grainSize
+    vec2 scaledUv = uv * (vec2(1920.0, 1080.0) / grainSize);
+    // Animate at 24fps discrete ticks — mimics per-frame grain variation
+    float frame = floor(time * 24.0);
+    return hash(floor(scaledUv) + vec2(frame * 127.1, frame * 311.7));
+  }
+
+  void main() {
+    vec4 colour = texture2D(u_source, v_uv);
+
+    // ---- Exposure shifts ----
+    // Aperture: wide open (0) slightly brighter, stopped down slightly darker
+    // Range approximately ±0.15 stops (subtle)
+    float apertureBrightness = mix(0.15, -0.10, u_apertureT);
+
+    // Shutter: slow (0) = overexposed/bright, fast (1) = underexposed/dark
+    // Moderate range (~0.5 stops)
+    float shutterBrightness  = mix(0.25, -0.20, u_shutterT);
+
+    // ISO: low (0) = crushed blacks, high (1) = blown to white
+    // Dramatic — nearly full range
+    float isoBrightness      = mix(-0.50, 0.50, u_isoT);
+
+    // Apply as power curve (gamma adjustment)
+    // totalBrightness > 0 → brighter (gamma < 1), < 0 → darker (gamma > 1)
+    float totalBrightness = apertureBrightness + shutterBrightness + isoBrightness;
+    float gamma = clamp(1.0 - totalBrightness, 0.1, 3.5);
+    colour.rgb  = pow(max(colour.rgb, vec3(0.0001)), vec3(gamma));
+
+    // ---- Film grain (ISO) ----
+    // Intensity: 0 at ISO=0, max ~0.18 at ISO=12800
+    float grainIntensity = u_isoT * 0.18;
+    // Grain size: 1px at low ISO, up to 3.5px at high ISO
+    float grainSize      = mix(1.0, 3.5, u_isoT);
+
+    if (grainIntensity > 0.002) {
+      float grain = filmGrain(v_uv, grainSize, u_time);
+      // Centre around 0: grain is bidirectional (adds and subtracts)
+      grain = (grain - 0.5) * 2.0 * grainIntensity;
+      colour.rgb = clamp(colour.rgb + vec3(grain), 0.0, 1.0);
+    }
+
+    gl_FragColor = colour;
+  }
+`;
+
+// ---- Pass 4: White flash overlay ----
+const FS_FLASH = `
+  precision mediump float;
+  uniform float u_alpha;
+  void main() {
+    gl_FragColor = vec4(1.0, 1.0, 1.0, u_alpha);
+  }
+`;
+
+// ============================================================
+// SHADER COMPILATION HELPERS
+// ============================================================
+
+function compileShader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error('Shader error:', gl.getShaderInfoLog(s), src);
+  }
+  return s;
+}
+
+function makeProgram(vsSrc, fsSrc) {
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  return prog;
+}
+
+// Compile all programs
+const progComposite = makeProgram(VS, FS_COMPOSITE);
+const progBlur      = makeProgram(VS, FS_BLUR);
+const progRadial    = makeProgram(VS, FS_RADIAL);
+const progGrain     = makeProgram(VS, FS_GRAIN);
+const progFlash     = makeProgram(VS, FS_FLASH);
+
+// ============================================================
+// FULLSCREEN QUAD BUFFER (shared by all passes)
+// ============================================================
+
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+// Two triangles covering clip space as a TRIANGLE_STRIP
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+  -1, -1,   1, -1,   -1, 1,   1, 1
+]), gl.STATIC_DRAW);
+
+function bindQuad(prog) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  const loc = gl.getAttribLocation(prog, 'a_position');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+}
+
+function drawQuad() {
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// ============================================================
+// FRAMEBUFFER OBJECTS
+// ============================================================
+
+function makeFBO(w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  return { fbo, tex };
+}
+
+const fboComp = makeFBO(W, H);  // composite: slide + aspect-ratio correction
+const fboA    = makeFBO(W, H);  // H-blur intermediate
+const fboB    = makeFBO(W, H);  // V-blur result (aperture done)
+const fboC    = makeFBO(W, H);  // Radial blur result (shutter done)
+
+// ============================================================
+// TEXTURE LOADING
+// ============================================================
+
+// Create a flat grey texture as placeholder for images without real assets
+function makePlaceholderTexture(r, g, b) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  // Single pixel — GPU will stretch it to fill UV space
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+    new Uint8Array([r, g, b, 255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return tex;
+}
+
+// Shared texture upload helper — used by both loader variants below
+function _uploadToTex(tex, imgEl) {
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, imgEl);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  // Non-power-of-2 textures cannot use mipmaps in WebGL 1; keep LINEAR + CLAMP_TO_EDGE.
+}
+
+function _initTexParams(tex) {
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+
+// Loads a texture and also tracks the image's aspect ratio (width/height).
+// Returns { tex, aspect } where aspect is updated once the image loads.
+function loadTextureTracked(src) {
+  const asset = { tex: gl.createTexture(), aspect: 1.0 };
+  // Grey placeholder while loading
+  gl.bindTexture(gl.TEXTURE_2D, asset.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+    new Uint8Array([100, 100, 100, 255]));
+  _initTexParams(asset.tex);
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    asset.aspect = img.naturalWidth / img.naturalHeight;
+    _uploadToTex(asset.tex, img);
+  };
+  img.onerror = () => console.warn('Could not load texture:', src);
+  img.src = src;
+  return asset;
+}
+
+// Loads a depth map (or any single-use texture) — returns tex handle only.
+function loadTexture(src) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+    new Uint8Array([100, 100, 100, 255]));
+  _initTexParams(tex);
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload  = () => _uploadToTex(tex, img);
+  img.onerror = () => console.warn('Could not load texture:', src);
+  img.src = src;
+  return tex;
+}
+
+// Distinct grey shades for placeholder images (fallback if no image path provided)
+const PLACEHOLDER_GREYS = [90, 110, 70, 130];
+
+// Load textures for all images.
+// photoAsset: { tex, aspect } — aspect updated asynchronously when image loads.
+// depthTex:   plain WebGL texture handle (aspect not needed for depth maps).
+const imageTextures = IMAGES.map((img, i) => {
+  const g = PLACEHOLDER_GREYS[i];
+  return {
+    photoAsset: img.image
+      ? loadTextureTracked(img.image)
+      : { tex: makePlaceholderTexture(g, g, g), aspect: 16 / 9 },
+    depthTex: img.depth
+      ? loadTexture(img.depth)
+      : makePlaceholderTexture(128, 128, 128)
+  };
+});
+
+// ============================================================
+// RENDER PASSES
+// ============================================================
+
+// Bind a texture to a texture unit and set a sampler uniform
+function bindTex(prog, uniformName, unit, tex) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.uniform1i(gl.getUniformLocation(prog, uniformName), unit);
+}
+
+// Pass 0: composite — slide + aspect-ratio correction → fboComp
+function renderComposite(assetA, assetB, slideT, slideDir) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboComp.fbo);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(progComposite);
+  bindQuad(progComposite);
+  bindTex(progComposite, 'u_imageA', 0, assetA.tex);
+  bindTex(progComposite, 'u_imageB', 1, assetB.tex);
+  gl.uniform1f(gl.getUniformLocation(progComposite, 'u_aspectA'),  assetA.aspect);
+  gl.uniform1f(gl.getUniformLocation(progComposite, 'u_aspectB'),  assetB.aspect);
+  gl.uniform1f(gl.getUniformLocation(progComposite, 'u_slideT'),   slideT);
+  gl.uniform1f(gl.getUniformLocation(progComposite, 'u_slideDir'), slideDir);
+  drawQuad();
+}
+
+// Pass 1: separable Gaussian blur (aperture) — fboComp → fboA → fboB
+function renderBlur(apertureT) {
+  // max 20px at 1080p; uniform (no depth mask) across the composited frame
+  const radius = 0.018 * (1.0 - apertureT);
+
+  // H pass: fboComp → fboA
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboA.fbo);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(progBlur);
+  bindQuad(progBlur);
+  bindTex(progBlur, 'u_source', 0, fboComp.tex);
+  gl.uniform1f(gl.getUniformLocation(progBlur, 'u_blurRadius'), radius);
+  gl.uniform2f(gl.getUniformLocation(progBlur, 'u_direction'),  1.0, 0.0);
+  drawQuad();
+
+  // V pass: fboA → fboB
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboB.fbo);
+  gl.useProgram(progBlur);
+  bindTex(progBlur, 'u_source', 0, fboA.tex);
+  gl.uniform1f(gl.getUniformLocation(progBlur, 'u_blurRadius'), radius);
+  gl.uniform2f(gl.getUniformLocation(progBlur, 'u_direction'),  0.0, 1.0);
+  drawQuad();
+}
+
+function renderPass2(shutterT) {
+  // Radial blur: fboB → fboC
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboC.fbo);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(progRadial);
+  bindQuad(progRadial);
+  bindTex(progRadial, 'u_source', 0, fboB.tex);
+  gl.uniform1f(gl.getUniformLocation(progRadial, 'u_shutterT'), shutterT);
+  gl.uniform2f(gl.getUniformLocation(progRadial, 'u_centre'),   0.5, 0.5);
+  drawQuad();
+}
+
+function renderPass3(apertureT, shutterT, isoT, time) {
+  // Grain + exposure: fboC → canvas
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(progGrain);
+  bindQuad(progGrain);
+  bindTex(progGrain, 'u_source', 0, fboC.tex);
+  gl.uniform1f(gl.getUniformLocation(progGrain, 'u_apertureT'), apertureT);
+  gl.uniform1f(gl.getUniformLocation(progGrain, 'u_shutterT'),  shutterT);
+  gl.uniform1f(gl.getUniformLocation(progGrain, 'u_isoT'),      isoT);
+  gl.uniform1f(gl.getUniformLocation(progGrain, 'u_time'),      time);
+  drawQuad();
+}
+
+function renderFlash(alpha) {
+  // Additive white flash quad over final image
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(progFlash);
+  bindQuad(progFlash);
+  gl.uniform1f(gl.getUniformLocation(progFlash, 'u_alpha'), alpha);
+  drawQuad();
+  gl.disable(gl.BLEND);
+}
+
+// ============================================================
+// HUD — Canvas2D triangle overlay
+// ============================================================
+
+// Triangle geometry: equilateral, filling the full canvas vertically.
+// Side length is derived from the available vertical space so the triangle
+// spans top-to-bottom with a small margin. Horizontally it will be ~1200px
+// wide (centred on a 1920px canvas) — as wide as an equilateral triangle
+// can be while still fitting within the 16:9 frame.
+const TRI_MARGIN = 24;
+const TRI_SIDE   = (H - TRI_MARGIN * 2) * 2 / Math.sqrt(3);  // ≈ 1201px
+const TRI_HEIGHT = TRI_SIDE * Math.sqrt(3) / 2;               // ≈ H - 2*MARGIN
+
+function computeTriVerts() {
+  const cx = W / 2;
+  return [
+    { x: cx,                   y: TRI_MARGIN },                        // v0: top apex  (Aperture)
+    { x: cx - TRI_SIDE / 2,    y: TRI_MARGIN + TRI_HEIGHT },           // v1: bottom-left (Shutter)
+    { x: cx + TRI_SIDE / 2,    y: TRI_MARGIN + TRI_HEIGHT }            // v2: bottom-right (ISO)
+  ];
+}
+const TRI_VERTS = computeTriVerts();
+
+// Dot position along edge from va to vb, t = 0..1
+function edgeDot(va, vb, t) {
+  return { x: va.x + (vb.x - va.x) * t, y: va.y + (vb.y - va.y) * t };
+}
+
+function proximityToAmber(proximity) {
+  // 0..1 proximity → RGB colour string
+  // Below 0.5: cool grey; above 0.5: warm to amber
+  if (proximity < 0.5) return 'rgba(200,200,200,1)';
+  const f = (proximity - 0.5) / 0.5;  // 0..1
+  const r = Math.round(200 + 55 * f);
+  const g = Math.round(200 - 80 * f);
+  const b = Math.round(200 - 160 * f);
+  return `rgba(${r},${g},${b},1)`;
+}
+
+function drawHUD(alpha) {
+  hudCtx.clearRect(0, 0, W, H);
+  if (alpha < 0.01) return;
+
+  const v = TRI_VERTS;
+  const baseAlpha = alpha * 0.35;  // triangle lines at 35% opacity max
+
+  // ---- Draw triangle edges ----
+  hudCtx.save();
+  hudCtx.globalAlpha = baseAlpha;
+  hudCtx.strokeStyle = '#d0d0d0';
+  hudCtx.lineWidth   = 1.5;
+  hudCtx.beginPath();
+  hudCtx.moveTo(v[0].x, v[0].y);
+  hudCtx.lineTo(v[1].x, v[1].y);
+  hudCtx.lineTo(v[2].x, v[2].y);
+  hudCtx.closePath();
+  hudCtx.stroke();
+  hudCtx.restore();
+
+  // ---- Per-axis: dot + glow + label ----
+  const axes = [
+    {
+      // Aperture dot travels bottom edge: v[1] → v[2]
+      t:         state.aperture / 255,
+      va:        v[1], vb: v[2],
+      proximity: state.proximity.aperture,
+      display:   apertureToFStop(state.aperture),
+      labelSide: 'above'
+    },
+    {
+      // Shutter dot travels right edge: v[0] → v[2]
+      t:         state.shutter / 255,
+      va:        v[0], vb: v[2],
+      proximity: state.proximity.shutter,
+      display:   shutterToFraction(state.shutter),
+      labelSide: 'right'
+    },
+    {
+      // ISO dot travels left edge: v[0] → v[1]
+      t:         state.iso / 255,
+      va:        v[0], vb: v[1],
+      proximity: state.proximity.iso,
+      display:   isoToASA(state.iso),
+      labelSide: 'left'
+    }
+  ];
+
+  for (const ax of axes) {
+    const pos  = edgeDot(ax.va, ax.vb, ax.t);
+    const col  = proximityToAmber(ax.proximity);
+    const glow = Math.max(0, (ax.proximity - 0.5) / 0.5);  // 0..1
+
+    hudCtx.save();
+    hudCtx.globalAlpha = alpha;
+
+    // Glow halo when approaching target
+    if (glow > 0.02) {
+      const rad = 10 + glow * 14;
+      const grad = hudCtx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, rad);
+      grad.addColorStop(0, `rgba(255,160,30,${0.55 * glow * alpha})`);
+      grad.addColorStop(1, `rgba(255,160,30,0)`);
+      hudCtx.fillStyle = grad;
+      hudCtx.beginPath();
+      hudCtx.arc(pos.x, pos.y, rad, 0, Math.PI * 2);
+      hudCtx.fill();
+    }
+
+    // Dot
+    hudCtx.fillStyle = col;
+    hudCtx.beginPath();
+    hudCtx.arc(pos.x, pos.y, 4.5, 0, Math.PI * 2);
+    hudCtx.fill();
+
+    // Label — small monospace readout
+    hudCtx.font = '13px "Courier New", monospace';
+    hudCtx.fillStyle = col;
+    // Offset label so it doesn't overlap dot
+    const lx = pos.x + (ax.labelSide === 'left' ? -68 : 9);
+    const ly = pos.y + (ax.labelSide === 'above' ? -10 : 5);
+    hudCtx.fillText(ax.display, lx, ly);
+
+    hudCtx.restore();
+  }
+
+  // ---- Vertex labels (always at low opacity) ----
+  const vertLabels = ['APERTURE', 'SHUTTER', 'ISO'];
+  const vertOffsets = [
+    { x: -40, y: -14 },  // top apex: above, centred
+    { x: -72, y: 20 },   // bottom-left: below-left
+    { x: 10,  y: 20 }    // bottom-right: below-right
+  ];
+  hudCtx.save();
+  hudCtx.globalAlpha = alpha * 0.4;
+  hudCtx.font = '10px "Courier New", monospace';
+  hudCtx.fillStyle = '#aaa';
+  for (let i = 0; i < 3; i++) {
+    hudCtx.fillText(vertLabels[i], v[i].x + vertOffsets[i].x, v[i].y + vertOffsets[i].y);
+  }
+  hudCtx.restore();
+}
+
+// ============================================================
+// APPLICATION STATE
+// ============================================================
+
+const state = {
+  // Encoder values 0-255
+  aperture: 127,
+  shutter:  127,
+  iso:      127,
+
+  // Current and next image indices
+  currentImg: 0,
+  nextImg:    0,
+
+  // Slide transition
+  slideProgress: 0.0,   // raw linear 0..1 timer
+  slideT:        0.0,   // eased value passed to composite shader
+  slideDir:      1.0,   // +1=slide left (higher index), -1=slide right (lower)
+  slideActive:   false,
+
+  // HUD
+  hudAlpha:       0.0,
+  hudAlphaTarget: 0.0,
+
+  // Correct exposure
+  proximity: { aperture: 0, shutter: 0, iso: 0 },
+  triggered:  false,
+
+  // Trigger flash
+  triggerFlash: 0.0,
+
+  // Idle/attract
+  mode:           'idle',   // 'idle' | 'active'
+  lastInputTime:  0,        // performance.now() / 1000
+
+  // Hardware mode flag
+  hardwareMode: false,
+
+  // Simulator UI visible
+  simVisible: false,
+
+  // Previous frame time (seconds)
+  prevTime: 0
+};
+
+// ============================================================
+// PROXIMITY SCORING
+// ============================================================
+
+function proximityScore(value, target) {
+  const dist = Math.abs(value - target.value);
+  if (dist <= target.tolerance) return 1.0;
+  // Linear ramp: 0.5 at 3×tolerance, 1.0 at tolerance boundary
+  return Math.max(0, 0.5 - 0.5 * (dist - target.tolerance) / (target.tolerance * 2));
+}
+
+function updateProximity() {
+  const img = IMAGES[state.currentImg];
+  state.proximity.aperture = proximityScore(state.aperture, img.targets.aperture);
+  state.proximity.shutter  = proximityScore(state.shutter,  img.targets.shutter);
+  state.proximity.iso      = proximityScore(state.iso,      img.targets.iso);
+}
+
+// ============================================================
+// CORRECT EXPOSURE EVENT
+// ============================================================
+
+const shutterAudio = new Audio('assets/shutter_click.mp3');
+const labelEl      = document.getElementById('label');
+let   labelTimeout = null;
+
+function triggerCorrectExposure() {
+  if (state.triggered) return;
+  state.triggered   = true;
+  state.triggerFlash = 1.0;
+
+  // Play shutter click
+  shutterAudio.currentTime = 0;
+  shutterAudio.play().catch(() => {});
+
+  // Show label
+  const img = IMAGES[state.currentImg];
+  labelEl.textContent = img.label;
+  labelEl.style.opacity = '1';
+
+  // HUD pulse: briefly spike alpha above normal
+  state.hudAlpha = 1.0;
+
+  // Hide label after 4 seconds
+  if (labelTimeout) clearTimeout(labelTimeout);
+  labelTimeout = setTimeout(() => {
+    labelEl.style.opacity = '0';
+  }, 4000);
+}
+
+function checkTrigger() {
+  const allCorrect = state.proximity.aperture === 1.0 &&
+                     state.proximity.shutter  === 1.0 &&
+                     state.proximity.iso      === 1.0;
+
+  if (allCorrect && !state.triggered) {
+    triggerCorrectExposure();
+  }
+
+  // Hysteresis: clear trigger only when ALL axes are outside tolerance
+  if (state.triggered && !allCorrect) {
+    const none = state.proximity.aperture < 1.0 &&
+                 state.proximity.shutter  < 1.0 &&
+                 state.proximity.iso      < 1.0;
+    if (none) state.triggered = false;
+  }
+}
+
+// ============================================================
+// IDLE / ATTRACT STATE
+// ============================================================
+
+const IDLE_TIMEOUT = 60.0;  // seconds
+
+function idleOscillate(time) {
+  // Three incommensurable frequencies so the pattern never visibly repeats
+  // Amplitude ±48 centred at 128 — keeps values in mid-range
+  state.aperture = Math.round(128 + 48 * Math.sin(time * 0.11));
+  state.shutter  = Math.round(128 + 40 * Math.sin(time * 0.17 + 1.2));
+  state.iso      = Math.round(128 + 44 * Math.sin(time * 0.13 + 2.4));
+}
+
+function onEncoderInput() {
+  state.lastInputTime = state.prevTime;
+  if (state.mode === 'idle') {
+    state.mode = 'active';
+    state.hudAlphaTarget = 1.0;
+  }
+}
+
+// ============================================================
+// IMAGE SELECTION
+// ============================================================
+
+function randomMidRange() {
+  // Random value in 70–185 range — avoids extremes
+  return Math.floor(70 + Math.random() * 115);
+}
+
+function selectImage(index) {
+  if (index < 0 || index >= IMAGES.length) return;
+  if (index === state.currentImg && !state.slideActive) return;
+  if (index === state.nextImg && state.slideActive) return;  // already heading there
+
+  // Snap any in-progress slide before starting a new one
+  if (state.slideActive) {
+    state.currentImg   = state.nextImg;
+    state.slideProgress = 0.0;
+    state.slideT        = 0.0;
+  }
+
+  // Direction: higher index → slide left (+1); lower → slide right (-1)
+  state.slideDir    = (index > state.currentImg) ? 1.0 : -1.0;
+  state.nextImg     = index;
+  state.slideActive = true;
+  state.triggered   = false;  // reset exposure lock on image change
+
+  // Randomise encoder positions to a plausibly-wrong starting point
+  state.aperture = randomMidRange();
+  state.shutter  = randomMidRange();
+  state.iso      = randomMidRange();
+
+  updateSliders();
+  updateActiveButton();
+}
+
+// ============================================================
+// LERP HELPER
+// ============================================================
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// Exponential lerp rate: 1 - base^dt → frame-rate independent
+function expLerp(current, target, base, dt) {
+  return lerp(current, target, 1.0 - Math.pow(base, dt));
+}
+
+// ============================================================
+// MAIN RENDER LOOP
+// ============================================================
+
+function frame(timestamp) {
+  const time = timestamp / 1000;
+  const dt   = Math.min(time - state.prevTime, 0.1);  // cap at 100ms
+  state.prevTime = time;
+
+  // Skip first frame (dt would be huge)
+  if (dt >= 0.1) {
+    requestAnimationFrame(frame);
+    return;
+  }
+
+  // ---- Idle detection ----
+  const timeSinceInput = time - state.lastInputTime;
+  if (state.mode === 'active' && timeSinceInput > IDLE_TIMEOUT) {
+    state.mode = 'idle';
+    state.hudAlphaTarget = 0.0;
+  }
+
+  // ---- Idle oscillation ----
+  if (state.mode === 'idle') {
+    idleOscillate(time);
+    // Keep sliders in sync during idle if sim is visible
+    if (state.simVisible) updateSliders();
+  }
+
+  // ---- Smooth HUD alpha: 95% in ~1.5s ----
+  state.hudAlpha = expLerp(state.hudAlpha, state.hudAlphaTarget, 0.02, dt);
+
+  // ---- Slide transition ----
+  const SLIDE_DURATION = 0.55;  // seconds
+  if (state.slideActive) {
+    state.slideProgress += dt / SLIDE_DURATION;
+    if (state.slideProgress >= 1.0) {
+      // Transition complete — commit
+      state.currentImg    = state.nextImg;
+      state.slideProgress = 0.0;
+      state.slideT        = 0.0;
+      state.slideActive   = false;
+      updateActiveButton();
+    } else {
+      // Quadratic ease-out: fast start, smooth deceleration
+      const p = state.slideProgress;
+      state.slideT = 1.0 - (1.0 - p) * (1.0 - p);
+    }
+  }
+
+  // ---- Proximity + trigger ----
+  updateProximity();
+  checkTrigger();
+
+  // ---- Trigger flash decay ----
+  state.triggerFlash = Math.max(0, state.triggerFlash - dt * 1.5);
+
+  // ---- Get current assets ----
+  const cur  = imageTextures[state.currentImg];
+  const next = imageTextures[state.nextImg];
+
+  const aT = state.aperture / 255;
+  const sT = state.shutter  / 255;
+  const iT = state.iso      / 255;
+
+  // ---- WebGL passes ----
+  renderComposite(cur.photoAsset, next.photoAsset, state.slideT, state.slideDir);
+  renderBlur(aT);
+  renderPass2(sT);
+  renderPass3(aT, sT, iT, time);
+  if (state.triggerFlash > 0.005) {
+    renderFlash(state.triggerFlash * 0.7);
+  }
+
+  // ---- HUD ----
+  drawHUD(state.hudAlpha);
+
+  // ---- Update photo labels in sim UI ----
+  if (state.simVisible) {
+    document.getElementById('apertureLabel').textContent = apertureToFStop(state.aperture);
+    document.getElementById('shutterLabel').textContent  = shutterToFraction(state.shutter);
+    document.getElementById('isoLabel').textContent      = isoToASA(state.iso);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ============================================================
+// SIMULATOR UI
+// ============================================================
+
+const simUI          = document.getElementById('simUI');
+const modeBadge      = document.getElementById('modeBadge');
+const apertureSlider = document.getElementById('apertureSlider');
+const shutterSlider  = document.getElementById('shutterSlider');
+const isoSlider      = document.getElementById('isoSlider');
+
+function showSimUI() {
+  state.simVisible = true;
+  simUI.style.display     = 'flex';
+  document.getElementById('imgButtons').style.display = 'flex';
+  modeBadge.textContent   = 'SIMULATOR';
+  modeBadge.style.opacity = '1';
+}
+
+function hideSimUI() {
+  state.simVisible = false;
+  simUI.style.display     = 'none';
+  document.getElementById('imgButtons').style.display = 'none';
+  modeBadge.textContent   = 'HARDWARE';
+  modeBadge.style.opacity = '1';
+}
+
+function updateSliders() {
+  apertureSlider.value = state.aperture;
+  shutterSlider.value  = state.shutter;
+  isoSlider.value      = state.iso;
+}
+
+function onSliderChange() {
+  if (!state.hardwareMode) {
+    state.aperture = parseInt(apertureSlider.value);
+    state.shutter  = parseInt(shutterSlider.value);
+    state.iso      = parseInt(isoSlider.value);
+    onEncoderInput();
+  }
+}
+
+apertureSlider.addEventListener('input', onSliderChange);
+shutterSlider.addEventListener('input',  onSliderChange);
+isoSlider.addEventListener('input',      onSliderChange);
+
+// ---- Image selection buttons ----
+const imgButtonsEl = document.getElementById('imgButtons');
+IMAGES.forEach((img, i) => {
+  const btn = document.createElement('button');
+  btn.className  = 'imgBtn' + (i === 0 ? ' active' : '');
+  btn.textContent = String(i + 1);
+  btn.addEventListener('click', () => selectImage(i));
+  imgButtonsEl.appendChild(btn);
+});
+
+function updateActiveButton() {
+  // Highlight the destination button immediately on press, not after transition
+  const activeIdx = state.slideActive ? state.nextImg : state.currentImg;
+  const btns = imgButtonsEl.querySelectorAll('.imgBtn');
+  btns.forEach((b, i) => b.classList.toggle('active', i === activeIdx));
+}
+
+// ============================================================
+// KEYBOARD HANDLING
+// ============================================================
+
+document.addEventListener('keydown', (e) => {
+  switch (e.key.toLowerCase()) {
+    case 'h':
+      // Toggle hardware/simulator mode
+      if (state.hardwareMode) {
+        state.hardwareMode = false;
+        showSimUI();
+      } else {
+        state.hardwareMode = true;
+        hideSimUI();
+      }
+      break;
+    case '1': selectImage(0); onEncoderInput(); break;
+    case '2': selectImage(1); onEncoderInput(); break;
+    case '3': selectImage(2); onEncoderInput(); break;
+    case '4': selectImage(3); onEncoderInput(); break;
+    case 'f':
+      // Fullscreen toggle
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+      break;
+  }
+});
+
+// ============================================================
+// WEB SERIAL API
+// ============================================================
+
+const connectBtn = document.getElementById('connectBtn');
+
+if ('serial' in navigator) {
+  connectBtn.style.display = 'block';
+  connectBtn.addEventListener('click', connectSerial);
+}
+
+async function connectSerial() {
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    connectBtn.textContent = '⬡ HARDWARE CONNECTED';
+    connectBtn.style.borderColor = 'rgba(100,255,100,0.4)';
+    connectBtn.style.color = 'rgba(100,255,100,0.7)';
+
+    state.hardwareMode = true;
+    hideSimUI();
+
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable);
+    const reader  = decoder.readable.getReader();
+
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      const lines = buf.split('\n');
+      buf = lines.pop();  // keep incomplete tail
+      for (const line of lines) parseSerial(line.trim());
+    }
+  } catch (err) {
+    console.warn('Serial connection error:', err);
+    connectBtn.textContent = '⬡ CONNECT HARDWARE';
+  }
+}
+
+function parseSerial(line) {
+  // Expected format: A:127,S:64,I:200  or  A:127,S:64,I:200,BTN:2
+  const m = line.match(/A:(\d+),S:(\d+),I:(\d+)(?:,BTN:(\d+))?/);
+  if (!m) return;
+
+  const newA = Math.min(255, Math.max(0, parseInt(m[1])));
+  const newS = Math.min(255, Math.max(0, parseInt(m[2])));
+  const newI = Math.min(255, Math.max(0, parseInt(m[3])));
+
+  const changed = newA !== state.aperture || newS !== state.shutter || newI !== state.iso;
+  state.aperture = newA;
+  state.shutter  = newS;
+  state.iso      = newI;
+
+  if (changed) onEncoderInput();
+
+  // Button press: BTN field only sent on press events
+  if (m[4]) {
+    const btnIdx = parseInt(m[4]) - 1;  // BTN:1 → index 0
+    selectImage(btnIdx);
+    onEncoderInput();
+  }
+}
+
+// ============================================================
+// INITIALISE
+// ============================================================
+
+// Start in simulator mode — HUD starts hidden (idle state)
+showSimUI();
+
+// Randomise starting position (plausibly wrong)
+state.aperture = randomMidRange();
+state.shutter  = randomMidRange();
+state.iso      = randomMidRange();
+updateSliders();
+
+// Begin render loop
+requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>

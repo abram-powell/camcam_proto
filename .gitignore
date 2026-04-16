@@ -1,0 +1,9 @@
+# Temp extraction from docx — not needed in repo
+_brief_unpacked/
+
+# Claude Code internal files
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
